@@ -1,0 +1,72 @@
+trigger:
+  - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  nodeVersion: '18.x'
+
+stages:
+  - stage: Build
+    jobs:
+      - job: BuildNode
+        displayName: Build Node.js Application
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: $(nodeVersion)
+            displayName: 'Install Node.js'
+
+          - script: |
+              npm ci
+            displayName: 'Install Dependencies'
+
+          - script: |
+              npm start &
+              sleep 5
+              curl -f http://localhost:3000/health || exit 1
+            displayName: 'Test Application'
+            continueOnError: true
+
+          - task: ArchiveFiles@2
+            inputs:
+              rootFolderOrFile: '$(Build.SourcesDirectory)'
+              includeRootFolder: false
+              archiveType: 'zip'
+              archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip'
+              replaceExistingArchive: true
+            displayName: 'Package Application'
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+              ArtifactName: 'drop'
+            displayName: 'Publish Artifacts'
+
+  - stage: Deploy
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - deployment: DeployToAppService
+        displayName: Deploy to Azure App Service
+        environment: production
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadBuildArtifacts@1
+                  inputs:
+                    buildType: 'current'
+                    downloadType: 'single'
+                    artifactName: 'drop'
+
+                - task: AzureWebApp@1
+                  inputs:
+                    azureSubscription: 'YOUR_AZURE_SERVICE_CONNECTION'
+                    appType: 'webAppLinux'
+                    appName: 'YOUR_APP_SERVICE_NAME'
+                    runtimeStack: 'NODE|18-lts'
+                    startupCommand: 'npm start'
+                    package: '$(Pipeline.Workspace)/drop/$(Build.BuildId).zip'
+                  displayName: 'Deploy to Azure App Service'
